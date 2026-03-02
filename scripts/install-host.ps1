@@ -96,6 +96,23 @@ if (-not $SkipModelDownload) {
         } catch {
             Write-Host "  ⚠ Could not cache model automatically. Run manually: foundry model run $Model" -ForegroundColor Yellow
         }
+
+        # Report which variant was selected for the hardware
+        try {
+            $modelInfo = & foundry model info $Model 2>&1 | Out-String
+            Write-Host ""
+            Write-Host "  Hardware variant details:" -ForegroundColor DarkGray
+            $modelInfo.Trim().Split("`n") | ForEach-Object {
+                $line = $_.Trim()
+                if ($line -match "(?i)(runtime|device|backend|hardware|accelerat|variant|gpu|cpu|npu|cuda|directml|onnx)") {
+                    Write-Host "    $_" -ForegroundColor Cyan
+                } elseif ($line) {
+                    Write-Host "    $_" -ForegroundColor DarkGray
+                }
+            }
+        } catch {
+            Write-Host "  ⚠ Could not retrieve model variant info. Run: foundry model info $Model" -ForegroundColor Yellow
+        }
     }
 } else {
     Write-Host "[2/6] Skipping model download (--SkipModelDownload)" -ForegroundColor DarkGray
