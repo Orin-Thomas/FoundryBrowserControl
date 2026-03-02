@@ -70,36 +70,56 @@ if (-not $SkipModelDownload) {
         Write-Host "  [WARN] Foundry Local not in PATH. Skipping model check." -ForegroundColor Yellow
         Write-Host "    After restarting your terminal, run: foundry model run $Model" -ForegroundColor Yellow
     } else {
-        # Check if the model is already cached
-        $modelList = & foundry model list 2>&1 | Out-String
-        if ($modelList -match [regex]::Escape($Model)) {
-            Write-Host "  [OK] Model '$Model' is available in the catalog" -ForegroundColor Green
+        # Check if the model is already cached (with timeout)
+        Write-Host "  Querying model catalog (timeout: 30s)..." -ForegroundColor DarkGray
+        $modelListJob = Start-Job -ScriptBlock { & foundry model list 2>&1 }
+        $modelListDone = $modelListJob | Wait-Job -Timeout 30
+        if ($modelListDone) {
+            $modelList = Receive-Job $modelListJob | Out-String
+            Remove-Job $modelListJob -Force
+            if ($modelList -match [regex]::Escape($Model)) {
+                Write-Host "  [OK] Model '$Model' is available in the catalog" -ForegroundColor Green
+            } else {
+                Write-Host "  Model '$Model' not found in catalog listing" -ForegroundColor Yellow
+            }
         } else {
-            Write-Host "  Model '$Model' not found in catalog listing" -ForegroundColor Yellow
+            Stop-Job $modelListJob -ErrorAction SilentlyContinue
+            Remove-Job $modelListJob -Force
+            Write-Host "  [WARN] 'foundry model list' timed out. Continuing..." -ForegroundColor Yellow
         }
-
-        # Ensure the service is running and the model is loaded
-        Write-Host "  Starting Foundry Local service and loading model (this may download the model on first run)..." -ForegroundColor Yellow
-        Write-Host "  This can take several minutes for large models." -ForegroundColor DarkGray
 
         # Start the service if not running
-        $serviceStatus = & foundry service status 2>&1 | Out-String
-        if ($serviceStatus -match "not running" -or $serviceStatus -match "error") {
-            & foundry service start 2>&1 | Out-Null
-            Start-Sleep -Seconds 3
+        Write-Host "  Starting Foundry Local service..." -ForegroundColor Yellow
+        $svcJob = Start-Job -ScriptBlock { & foundry service start 2>&1 }
+        $svcDone = $svcJob | Wait-Job -Timeout 30
+        if ($svcDone) {
+            Receive-Job $svcJob | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        } else {
+            Stop-Job $svcJob -ErrorAction SilentlyContinue
+            Write-Host "  [WARN] 'foundry service start' timed out. Continuing..." -ForegroundColor Yellow
         }
+        Remove-Job $svcJob -Force
+        Start-Sleep -Seconds 3
 
-        # Pull/cache the model
-        try {
-            & foundry cache model $Model 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        # Pull/cache the model (with timeout - this can take a while for first download)
+        Write-Host "  Downloading/caching model '$Model' (timeout: 5 min, first download may be large)..." -ForegroundColor Yellow
+        $cacheJob = Start-Job -ScriptBlock { param($m) & foundry cache model $m 2>&1 } -ArgumentList $Model
+        $cacheDone = $cacheJob | Wait-Job -Timeout 300
+        if ($cacheDone) {
+            Receive-Job $cacheJob | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
             Write-Host "  [OK] Model '$Model' is ready" -ForegroundColor Green
-        } catch {
-            Write-Host "  [WARN] Could not cache model automatically. Run manually: foundry model run $Model" -ForegroundColor Yellow
+        } else {
+            Stop-Job $cacheJob -ErrorAction SilentlyContinue
+            Write-Host "  [WARN] Model caching timed out. The download may still be in progress." -ForegroundColor Yellow
+            Write-Host "    Run manually after setup: foundry model run $Model" -ForegroundColor Yellow
         }
+        Remove-Job $cacheJob -Force
 
         # Report which variant was selected for the hardware
-        try {
-            $modelInfo = & foundry model info $Model 2>&1 | Out-String
+        $infoJob = Start-Job -ScriptBlock { param($m) & foundry model info $m 2>&1 } -ArgumentList $Model
+        $infoDone = $infoJob | Wait-Job -Timeout 15
+        if ($infoDone) {
+            $modelInfo = Receive-Job $infoJob | Out-String
             Write-Host ""
             Write-Host "  Hardware variant details:" -ForegroundColor DarkGray
             $modelInfo.Trim().Split("`n") | ForEach-Object {
@@ -110,9 +130,11 @@ if (-not $SkipModelDownload) {
                     Write-Host "    $_" -ForegroundColor DarkGray
                 }
             }
-        } catch {
-            Write-Host "  [WARN] Could not retrieve model variant info. Run: foundry model info $Model" -ForegroundColor Yellow
+        } else {
+            Stop-Job $infoJob -ErrorAction SilentlyContinue
+            Write-Host "  [WARN] 'foundry model info' timed out." -ForegroundColor Yellow
         }
+        Remove-Job $infoJob -Force
     }
 } else {
     Write-Host "[2/7] Skipping model download (-SkipModelDownload)" -ForegroundColor DarkGray
@@ -256,7 +278,17 @@ if (-not $foundryCmd) {
 } else {
     # Check if the model is already loaded by querying the service
     $modelAlreadyRunning = $false
-    $serviceOutput = & foundry service status 2>&1 | Out-String
+    $svcStatusJob = Start-Job -ScriptBlock { & foundry service status 2>&1 }
+    $svcStatusDone = $svcStatusJob | Wait-Job -Timeout 15
+    if ($svcStatusDone) {
+        $serviceOutput = Receive-Job $svcStatusJob | Out-String
+    } else {
+        Stop-Job $svcStatusJob -ErrorAction SilentlyContinue
+        $serviceOutput = ""
+        Write-Host "  [WARN] 'foundry service status' timed out." -ForegroundColor Yellow
+    }
+    Remove-Job $svcStatusJob -Force
+
     if ($serviceOutput -match "running" -and $serviceOutput -notmatch "not running") {
         $endpointMatch = [regex]::Match($serviceOutput, "https?://[\w\.\-]+:\d+")
         $endpoint = if ($endpointMatch.Success) { $endpointMatch.Value } else { "http://localhost:5273" }
@@ -274,12 +306,27 @@ if (-not $foundryCmd) {
 
     if (-not $modelAlreadyRunning) {
         Write-Host "  Starting Foundry Local service..." -ForegroundColor Yellow
-        # Start the background service (non-interactive)
-        & foundry service start 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        $startJob = Start-Job -ScriptBlock { & foundry service start 2>&1 }
+        $startDone = $startJob | Wait-Job -Timeout 30
+        if ($startDone) {
+            Receive-Job $startJob | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        } else {
+            Stop-Job $startJob -ErrorAction SilentlyContinue
+            Write-Host "  [WARN] 'foundry service start' timed out." -ForegroundColor Yellow
+        }
+        Remove-Job $startJob -Force
         Start-Sleep -Seconds 3
 
         # Discover the endpoint
-        $svcOut = & foundry service status 2>&1 | Out-String
+        $svcOutJob = Start-Job -ScriptBlock { & foundry service status 2>&1 }
+        $svcOutDone = $svcOutJob | Wait-Job -Timeout 15
+        $svcOut = ""
+        if ($svcOutDone) {
+            $svcOut = Receive-Job $svcOutJob | Out-String
+        } else {
+            Stop-Job $svcOutJob -ErrorAction SilentlyContinue
+        }
+        Remove-Job $svcOutJob -Force
         $epMatch = [regex]::Match($svcOut, "https?://[\w\.\-]+:\d+")
         $ep = if ($epMatch.Success) { $epMatch.Value } else { "http://localhost:5273" }
         Write-Host "  Service endpoint: $ep" -ForegroundColor DarkGray
@@ -326,9 +373,21 @@ if (-not $foundryCmd) {
     Write-Host "  [WARN] Foundry CLI not in PATH. Restart terminal and run: foundry service status" -ForegroundColor Yellow
 } else {
     # Check service status
-    $serviceOutput = & foundry service status 2>&1 | Out-String
-    Write-Host "  Service status:" -ForegroundColor DarkGray
-    $serviceOutput.Trim().Split("`n") | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    $valJob = Start-Job -ScriptBlock { & foundry service status 2>&1 }
+    $valDone = $valJob | Wait-Job -Timeout 15
+    if ($valDone) {
+        $serviceOutput = Receive-Job $valJob | Out-String
+    } else {
+        Stop-Job $valJob -ErrorAction SilentlyContinue
+        $serviceOutput = ""
+        Write-Host "  [WARN] 'foundry service status' timed out." -ForegroundColor Yellow
+    }
+    Remove-Job $valJob -Force
+
+    if ($serviceOutput) {
+        Write-Host "  Service status:" -ForegroundColor DarkGray
+        $serviceOutput.Trim().Split("`n") | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    }
 
     if ($serviceOutput -match "running" -and $serviceOutput -notmatch "not running") {
         Write-Host "  [OK] Foundry Local service is running" -ForegroundColor Green
