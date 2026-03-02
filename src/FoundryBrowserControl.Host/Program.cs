@@ -35,6 +35,18 @@ try
     using var writer = new NativeMessageWriter();
     using var llmClient = new FoundryLocalClient(endpoint, model);
 
+    // Pre-resolve the actual model name from Foundry Local
+    try
+    {
+        var models = await llmClient.ListModelsAsync(CancellationToken.None);
+        await logStream.WriteLineAsync($"[{DateTime.Now:o}] Available models: {string.Join(", ", models)}");
+        await logStream.WriteLineAsync($"[{DateTime.Now:o}] Resolved model: {llmClient.ResolvedModel}");
+    }
+    catch (Exception ex)
+    {
+        await logStream.WriteLineAsync($"[{DateTime.Now:o}] Model resolution failed: {ex.Message}");
+    }
+
     var agent = new BrowserAgent(reader, writer, llmClient);
 
     using var cts = new CancellationTokenSource();

@@ -76,20 +76,23 @@ public sealed class BrowserAgent
 
     private async Task HandleHealthCheckAsync(CancellationToken ct)
     {
-        // Test connectivity to Foundry Local by making a lightweight API call
+        // Test connectivity to Foundry Local with a lightweight /v1/models call
         try
         {
-            var messages = new List<ChatMessage>
-            {
-                ChatMessage.User("hi")
-            };
-            var result = await _llm.ChatAsync(messages, ct);
-            var ok = !string.IsNullOrEmpty(result);
+            var models = await _llm.ListModelsAsync(ct);
+            var ok = models.Count > 0;
 
             await _writer.WriteAsync(new NativeMessage
             {
                 Type = "health_check_result",
-                Payload = new { nativeHost = true, foundryLocal = ok, error = ok ? (string?)null : "LLM returned empty response" }
+                Payload = new
+                {
+                    nativeHost = true,
+                    foundryLocal = ok,
+                    model = _llm.ResolvedModel,
+                    availableModels = models,
+                    error = ok ? (string?)null : "No models loaded in Foundry Local"
+                }
             }, ct);
         }
         catch (Exception ex)

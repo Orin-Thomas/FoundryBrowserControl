@@ -199,10 +199,17 @@ function setRunning(running) {
 }
 
 function handleConnectionStatus(payload) {
-  const { nativeHost, foundryLocal, error } = payload;
+  const { nativeHost, foundryLocal, error, model, availableModels } = payload;
 
   if (nativeHost && foundryLocal) {
-    setConnectionState("connected", "Connected to Foundry Local");
+    const modelInfo = model ? ` (model: ${model})` : "";
+    setConnectionState("connected", "Connected to Foundry Local" + modelInfo);
+    addMessage("system",
+      "Connected to Foundry Local" + modelInfo +
+      (availableModels && availableModels.length > 0
+        ? "\nAvailable models: " + availableModels.join(", ")
+        : "")
+    );
   } else if (nativeHost && !foundryLocal) {
     setConnectionState("error", "Native host connected but Foundry Local is not responding");
     addMessage("agent-error",
@@ -210,8 +217,9 @@ function handleConnectionStatus(payload) {
       "Error: " + (error || "Unknown") + "\n" +
       "Troubleshooting:\n" +
       "  1. Check if Foundry Local is running: foundry service status\n" +
-      "  2. Start the model: foundry model run phi-4-mini\n" +
-      "  3. Check host log: %LOCALAPPDATA%\\FoundryBrowserControl\\host.log"
+      "  2. Start the service: foundry service start\n" +
+      "  3. Load the model: foundry model run phi-4-mini\n" +
+      "  4. Check host log: %LOCALAPPDATA%\\FoundryBrowserControl\\host.log"
     );
   } else {
     setConnectionState("error", "Cannot connect to native messaging host");
