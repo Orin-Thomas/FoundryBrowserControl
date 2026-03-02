@@ -126,8 +126,31 @@ if (-not $SkipBuild) {
 
     $dotnetCmd = Get-Command "dotnet" -ErrorAction SilentlyContinue
     if (-not $dotnetCmd) {
-        Write-Error ".NET SDK not found. Please install .NET 8 SDK: https://dotnet.microsoft.com/download/dotnet/8.0"
-        exit 1
+        Write-Host "  .NET SDK not found. Attempting to install via winget..." -ForegroundColor Yellow
+
+        $wingetCmd = Get-Command "winget" -ErrorAction SilentlyContinue
+        if (-not $wingetCmd) {
+            Write-Error "winget is not available. Please install .NET 8 SDK manually: https://dotnet.microsoft.com/download/dotnet/8.0"
+            exit 1
+        }
+
+        winget install Microsoft.DotNet.SDK.8 --accept-source-agreements --accept-package-agreements
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to install .NET 8 SDK via winget. Please install manually: https://dotnet.microsoft.com/download/dotnet/8.0"
+            exit 1
+        }
+
+        # Refresh PATH
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+        $dotnetCmd = Get-Command "dotnet" -ErrorAction SilentlyContinue
+        if (-not $dotnetCmd) {
+            Write-Host "  ⚠ .NET 8 SDK was installed but 'dotnet' is not in PATH yet." -ForegroundColor Yellow
+            Write-Host "    Restart your terminal, then re-run this script with -SkipFoundryInstall -SkipModelDownload." -ForegroundColor Yellow
+            exit 1
+        }
+
+        Write-Host "  ✓ .NET 8 SDK installed successfully" -ForegroundColor Green
     }
 
     $sdkVersion = & dotnet --version 2>&1
