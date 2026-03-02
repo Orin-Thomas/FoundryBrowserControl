@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text.RegularExpressions;
 using FoundryBrowserControl.Host.Agent;
 using FoundryBrowserControl.Host.Llm;
 using FoundryBrowserControl.Host.NativeMessaging;
@@ -15,11 +17,15 @@ try
 {
     await logStream.WriteLineAsync($"[{DateTime.Now:o}] Host started");
 
-    // Foundry Local endpoint — discover dynamically or use default
-    var endpoint = Environment.GetEnvironmentVariable("FOUNDRY_ENDPOINT")
-                   ?? "http://localhost:5273";
     var model = Environment.GetEnvironmentVariable("FOUNDRY_MODEL")
                 ?? "phi-4-mini";
+
+    // Discover Foundry Local endpoint: env var > foundry service status > default
+    var endpoint = Environment.GetEnvironmentVariable("FOUNDRY_ENDPOINT");
+    if (string.IsNullOrEmpty(endpoint))
+    {
+        endpoint = await DiscoverFoundryEndpointAsync(logStream);
+    }
 
     await logStream.WriteLineAsync($"[{DateTime.Now:o}] Using endpoint: {endpoint}, model: {model}");
 
@@ -47,4 +53,54 @@ finally
 {
     await logStream.WriteLineAsync($"[{DateTime.Now:o}] Host exiting");
     logStream.Dispose();
+}
+
+/// <summary>
+/// Discovers the Foundry Local endpoint by running 'foundry service status' and parsing the output.
+/// Falls back to http://localhost:5273 if discovery fails.
+/// </summary>
+static async Task<string> DiscoverFoundryEndpointAsync(StreamWriter log)
+{
+    const string fallback = "http://localhost:5273";
+
+    try
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "foundry",
+            Arguments = "service status",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using var process = Process.Start(psi);
+        if (process == null)
+        {
+            await log.WriteLineAsync($"[{DateTime.Now:o}] Could not start 'foundry service status', using fallback: {fallback}");
+            return fallback;
+        }
+
+        var output = await process.StandardOutput.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        await log.WriteLineAsync($"[{DateTime.Now:o}] foundry service status output: {output.Trim()}");
+
+        // Look for a URL pattern like http://localhost:NNNNN or http://127.0.0.1:NNNNN
+        var match = Regex.Match(output, @"https?://(?:localhost|127\.0\.0\.1):\d+");
+        if (match.Success)
+        {
+            await log.WriteLineAsync($"[{DateTime.Now:o}] Discovered endpoint: {match.Value}");
+            return match.Value;
+        }
+
+        await log.WriteLineAsync($"[{DateTime.Now:o}] No endpoint found in output, using fallback: {fallback}");
+    }
+    catch (Exception ex)
+    {
+        await log.WriteLineAsync($"[{DateTime.Now:o}] Endpoint discovery failed: {ex.Message}, using fallback: {fallback}");
+    }
+
+    return fallback;
 }
