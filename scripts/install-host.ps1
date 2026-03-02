@@ -23,7 +23,7 @@ Write-Host ""
 # Step 1: Check and install Foundry Local
 # -------------------------------------------------------
 if (-not $SkipFoundryInstall) {
-    Write-Host "[1/5] Checking Foundry Local..." -ForegroundColor Yellow
+    Write-Host "[1/6] Checking Foundry Local..." -ForegroundColor Yellow
 
     $foundryCmd = Get-Command "foundry" -ErrorAction SilentlyContinue
     if ($foundryCmd) {
@@ -56,14 +56,14 @@ if (-not $SkipFoundryInstall) {
         Write-Host "  ✓ Foundry Local installed successfully" -ForegroundColor Green
     }
 } else {
-    Write-Host "[1/5] Skipping Foundry Local install check (--SkipFoundryInstall)" -ForegroundColor DarkGray
+    Write-Host "[1/6] Skipping Foundry Local install check (--SkipFoundryInstall)" -ForegroundColor DarkGray
 }
 
 # -------------------------------------------------------
 # Step 2: Check and download the LLM model
 # -------------------------------------------------------
 if (-not $SkipModelDownload) {
-    Write-Host "[2/5] Checking model '$Model'..." -ForegroundColor Yellow
+    Write-Host "[2/6] Checking model '$Model'..." -ForegroundColor Yellow
 
     $foundryCmd = Get-Command "foundry" -ErrorAction SilentlyContinue
     if (-not $foundryCmd) {
@@ -98,14 +98,14 @@ if (-not $SkipModelDownload) {
         }
     }
 } else {
-    Write-Host "[2/5] Skipping model download (--SkipModelDownload)" -ForegroundColor DarkGray
+    Write-Host "[2/6] Skipping model download (--SkipModelDownload)" -ForegroundColor DarkGray
 }
 
 # -------------------------------------------------------
 # Step 3: Check .NET SDK and build the host
 # -------------------------------------------------------
 if (-not $SkipBuild) {
-    Write-Host "[3/5] Building C# native messaging host..." -ForegroundColor Yellow
+    Write-Host "[3/6] Building C# native messaging host..." -ForegroundColor Yellow
 
     $dotnetCmd = Get-Command "dotnet" -ErrorAction SilentlyContinue
     if (-not $dotnetCmd) {
@@ -128,13 +128,13 @@ if (-not $SkipBuild) {
         Pop-Location
     }
 } else {
-    Write-Host "[3/5] Skipping build (--SkipBuild)" -ForegroundColor DarkGray
+    Write-Host "[3/6] Skipping build (--SkipBuild)" -ForegroundColor DarkGray
 }
 
 # -------------------------------------------------------
 # Step 4: Locate the host executable
 # -------------------------------------------------------
-Write-Host "[4/5] Locating host executable..." -ForegroundColor Yellow
+Write-Host "[4/6] Locating host executable..." -ForegroundColor Yellow
 
 if (-not $HostPath) {
     $publishDir = Join-Path $projectDir "bin\Release\net8.0\win-x64\publish"
@@ -156,7 +156,7 @@ Write-Host "  ✓ Host: $HostPath" -ForegroundColor Green
 # -------------------------------------------------------
 # Step 5: Register native messaging host
 # -------------------------------------------------------
-Write-Host "[5/5] Registering native messaging host..." -ForegroundColor Yellow
+Write-Host "[5/6] Registering native messaging host..." -ForegroundColor Yellow
 
 # Build allowed_origins
 $allowedOrigins = @()
@@ -204,6 +204,46 @@ Set-ItemProperty -Path $chromeRegPath -Name "(Default)" -Value $manifestPath
 Write-Host "  Chrome registry: $chromeRegPath" -ForegroundColor DarkGray
 
 Write-Host "  ✓ Native messaging host registered" -ForegroundColor Green
+
+# -------------------------------------------------------
+# Step 6: Validate Foundry Local service is running
+# -------------------------------------------------------
+Write-Host "[6/6] Validating Foundry Local service..." -ForegroundColor Yellow
+
+$foundryCmd = Get-Command "foundry" -ErrorAction SilentlyContinue
+if (-not $foundryCmd) {
+    Write-Host "  ⚠ Foundry CLI not in PATH — cannot validate service. Restart terminal and run: foundry service status" -ForegroundColor Yellow
+} else {
+    # Check service status
+    $serviceOutput = & foundry service status 2>&1 | Out-String
+    Write-Host "  Service status:" -ForegroundColor DarkGray
+    $serviceOutput.Trim().Split("`n") | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+
+    if ($serviceOutput -match "running" -and $serviceOutput -notmatch "not running") {
+        Write-Host "  ✓ Foundry Local service is running" -ForegroundColor Green
+
+        # Try a quick health check against the API endpoint
+        $endpointMatch = [regex]::Match($serviceOutput, "https?://[^\s]+")
+        $endpoint = if ($endpointMatch.Success) { $endpointMatch.Value } else { "http://localhost:5273" }
+
+        try {
+            $response = Invoke-RestMethod -Uri "$endpoint/v1/models" -Method Get -TimeoutSec 10 -ErrorAction Stop
+            $modelIds = ($response.data | ForEach-Object { $_.id }) -join ", "
+            if ($modelIds) {
+                Write-Host "  ✓ API is responding. Loaded models: $modelIds" -ForegroundColor Green
+            } else {
+                Write-Host "  ✓ API is responding but no models are loaded yet." -ForegroundColor Yellow
+                Write-Host "    Run: foundry model run $Model" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "  ⚠ Service is running but API did not respond at $endpoint" -ForegroundColor Yellow
+            Write-Host "    The model may still be loading. Check with: foundry service status" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  ⚠ Foundry Local service is not running." -ForegroundColor Yellow
+        Write-Host "    Start it with: foundry model run $Model" -ForegroundColor Yellow
+    }
+}
 
 # -------------------------------------------------------
 # Summary
