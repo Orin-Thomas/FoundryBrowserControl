@@ -258,7 +258,7 @@ if (-not $foundryCmd) {
     $modelAlreadyRunning = $false
     $serviceOutput = & foundry service status 2>&1 | Out-String
     if ($serviceOutput -match "running" -and $serviceOutput -notmatch "not running") {
-        $endpointMatch = [regex]::Match($serviceOutput, "https?://[^\s]+")
+        $endpointMatch = [regex]::Match($serviceOutput, "https?://[\w\.\-]+:\d+")
         $endpoint = if ($endpointMatch.Success) { $endpointMatch.Value } else { "http://localhost:5273" }
         try {
             $response = Invoke-RestMethod -Uri "$endpoint/v1/models" -Method Get -TimeoutSec 5 -ErrorAction Stop
@@ -280,7 +280,7 @@ if (-not $foundryCmd) {
 
         # Discover the endpoint
         $svcOut = & foundry service status 2>&1 | Out-String
-        $epMatch = [regex]::Match($svcOut, "https?://[^\s]+")
+        $epMatch = [regex]::Match($svcOut, "https?://[\w\.\-]+:\d+")
         $ep = if ($epMatch.Success) { $epMatch.Value } else { "http://localhost:5273" }
         Write-Host "  Service endpoint: $ep" -ForegroundColor DarkGray
 
@@ -334,7 +334,7 @@ if (-not $foundryCmd) {
         Write-Host "  ✓ Foundry Local service is running" -ForegroundColor Green
 
         # Try a quick health check against the API endpoint
-        $endpointMatch = [regex]::Match($serviceOutput, "https?://[^\s]+")
+        $endpointMatch = [regex]::Match($serviceOutput, "https?://[\w\.\-]+:\d+")
         $endpoint = if ($endpointMatch.Success) { $endpointMatch.Value } else { "http://localhost:5273" }
 
         try {
