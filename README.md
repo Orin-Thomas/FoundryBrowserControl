@@ -18,48 +18,40 @@ Foundry Local (phi-4-mini)
 
 - **Windows 10/11** (x64 or ARM)
 - **[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)**
-- **[Foundry Local](https://github.com/microsoft/Foundry-Local)** — Install with:
+- **Microsoft Edge** (Chromium-based, v116+)
+- **[Foundry Local](https://github.com/microsoft/Foundry-Local)** — installed automatically by the setup script, or manually with:
   ```
   winget install Microsoft.FoundryLocal
   ```
-- **Microsoft Edge** (Chromium-based, v116+)
 
 ## Setup
 
-### 1. Start Foundry Local with a model
-
-```bash
-foundry model run phi-4-mini
-```
-
-> This downloads and starts the `phi-4-mini` model locally. You can also use `phi-3.5-mini` for a smaller/faster option.
-
-### 2. Build the C# host
-
-```bash
-cd src/FoundryBrowserControl.Host
-dotnet build -c Debug
-```
-
-### 3. Load the extension in Edge
-
-1. Open Edge and navigate to `edge://extensions`
-2. Enable **Developer mode** (toggle in the bottom-left)
-3. Click **Load unpacked** and select the `extension/` folder
-4. Copy the **Extension ID** that appears
-
-### 4. Register the native messaging host
+### Quick Start (one command)
 
 ```powershell
 cd scripts
-.\install-host.ps1 -ExtensionId <your-extension-id>
+.\install-host.ps1
 ```
 
-### 5. Use it
+This script will:
+1. ✅ Check if **Foundry Local** is installed — installs via `winget` if missing
+2. ✅ Check if the **LLM model** (`phi-4-mini`) is available — downloads if needed
+3. ✅ **Build** the C# native messaging host
+4. ✅ **Register** the native messaging host in the Windows registry
 
-1. Click the extension icon in Edge's toolbar — the sidebar panel opens
-2. Type a task like "Search Google for weather in Seattle"
-3. Watch the agent think and act!
+Use `-Model phi-3.5-mini` for a smaller/faster model, or pass `-SkipFoundryInstall`, `-SkipModelDownload`, `-SkipBuild` to skip individual steps.
+
+### After running the installer
+
+1. Start the model: `foundry model run phi-4-mini`
+2. Open Edge and navigate to `edge://extensions`
+3. Enable **Developer mode** (toggle in the bottom-left)
+4. Click **Load unpacked** and select the `extension/` folder
+5. Copy the **Extension ID** and re-run the installer to lock it down:
+   ```powershell
+   .\install-host.ps1 -ExtensionId <your-extension-id> -SkipFoundryInstall -SkipModelDownload -SkipBuild
+   ```
+6. Click the extension icon — the sidebar opens. Type a task!
 
 ## Configuration
 
