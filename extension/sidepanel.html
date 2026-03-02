@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Foundry Browser Control</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="header-title">
+        <span class="header-icon">🤖</span>
+        <h1>Foundry Browser Control</h1>
+      </div>
+      <div class="header-actions">
+        <button id="clearBtn" class="icon-btn" title="Clear conversation">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M2 3h12v1H2V3zm1 2v8.5a1.5 1.5 0 001.5 1.5h7a1.5 1.5 0 001.5-1.5V5H3zm3 2h1v5H6V7zm3 0h1v5H9V7z"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <div id="messages" class="messages">
+      <div class="message system">
+        <p>👋 Hello! I can help you automate browser tasks. Tell me what you'd like me to do.</p>
+        <p class="hint">Examples: "Search for weather in Seattle", "Fill in this form with my details", "Extract all links from this page"</p>
+      </div>
+    </div>
+
+    <div id="status" class="status hidden">
+      <div class="status-indicator"></div>
+      <span class="status-text"></span>
+    </div>
+
+    <div class="input-area">
+      <textarea id="taskInput" placeholder="Tell me what to do..." rows="2"></textarea>
+      <div class="input-actions">
+        <button id="sendBtn" class="primary-btn">Send</button>
+        <button id="stopBtn" class="danger-btn hidden">Stop</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
