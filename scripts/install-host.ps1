@@ -273,36 +273,45 @@ if (-not $foundryCmd) {
     }
 
     if (-not $modelAlreadyRunning) {
-        Write-Host "  Launching model in background (this may take a minute on first load)..." -ForegroundColor Yellow
-        # Start 'foundry model run' in a new window so it keeps running after the script exits
-        Start-Process -FilePath "foundry" -ArgumentList "model run $Model" -WindowStyle Normal
-        Write-Host "  Waiting for model to load..." -ForegroundColor DarkGray
+        Write-Host "  Starting Foundry Local service..." -ForegroundColor Yellow
+        # Start the background service (non-interactive)
+        & foundry service start 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        Start-Sleep -Seconds 3
 
-        # Poll until the API responds with the model loaded (up to 120 seconds)
+        # Discover the endpoint
+        $svcOut = & foundry service status 2>&1 | Out-String
+        $epMatch = [regex]::Match($svcOut, "https?://[^\s]+")
+        $ep = if ($epMatch.Success) { $epMatch.Value } else { "http://localhost:5273" }
+        Write-Host "  Service endpoint: $ep" -ForegroundColor DarkGray
+
+        # Trigger model loading by sending a lightweight chat completion request
+        Write-Host "  Loading model '$Model' (this may take a minute on first load)..." -ForegroundColor Yellow
+        $body = @{
+            model = $Model
+            messages = @(@{ role = "user"; content = "hi" })
+            max_tokens = 1
+        } | ConvertTo-Json -Depth 10
+
         $timeout = 120
         $elapsed = 0
         $modelReady = $false
         while ($elapsed -lt $timeout) {
-            Start-Sleep -Seconds 5
-            $elapsed += 5
             try {
-                $svcOut = & foundry service status 2>&1 | Out-String
-                $epMatch = [regex]::Match($svcOut, "https?://[^\s]+")
-                $ep = if ($epMatch.Success) { $epMatch.Value } else { "http://localhost:5273" }
-                $resp = Invoke-RestMethod -Uri "$ep/v1/models" -Method Get -TimeoutSec 5 -ErrorAction Stop
-                $loaded = ($resp.data | ForEach-Object { $_.id }) -join ", "
-                if ($loaded) {
-                    Write-Host "  ✓ Model is running: $loaded" -ForegroundColor Green
-                    $modelReady = $true
-                    break
-                }
+                $resp = Invoke-RestMethod -Uri "$ep/v1/chat/completions" -Method Post -Body $body -ContentType "application/json" -TimeoutSec 60 -ErrorAction Stop
+                Write-Host "  ✓ Model '$Model' is loaded and responding" -ForegroundColor Green
+                $modelReady = $true
+                break
             } catch {
-                Write-Host "    Still loading... ($elapsed`s)" -ForegroundColor DarkGray
+                $elapsed += 5
+                if ($elapsed -lt $timeout) {
+                    Write-Host "    Still loading... ($elapsed`s)" -ForegroundColor DarkGray
+                    Start-Sleep -Seconds 5
+                }
             }
         }
 
         if (-not $modelReady) {
-            Write-Host "  ⚠ Model is still loading. Check the Foundry Local window for progress." -ForegroundColor Yellow
+            Write-Host "  ⚠ Model is still loading. Check: foundry service status" -ForegroundColor Yellow
         }
     }
 }
