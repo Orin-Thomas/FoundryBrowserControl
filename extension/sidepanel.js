@@ -6,12 +6,15 @@ const sendBtn = document.getElementById("sendBtn");
 const stopBtn = document.getElementById("stopBtn");
 const clearBtn = document.getElementById("clearBtn");
 const statusEl = document.getElementById("status");
+const connectionLight = document.getElementById("connectionLight");
 
 let port = null;
 let isRunning = false;
 
 // Connect to background service worker
 function connectToBackground() {
+  setConnectionState("checking", "Checking connection...");
+
   port = chrome.runtime.connect({ name: "sidebar" });
 
   port.onMessage.addListener((message) => {
@@ -22,8 +25,12 @@ function connectToBackground() {
     console.log("[Sidebar] Disconnected from background");
     port = null;
     setRunning(false);
+    setConnectionState("disconnected", "Disconnected from background");
     showStatus("disconnected", "Disconnected. Will reconnect on next task.");
   });
+
+  // Request a connection health check
+  port.postMessage({ type: "check_connection" });
 }
 
 // Handle messages from the background
@@ -36,6 +43,9 @@ function handleMessage(message) {
       break;
     case "ask_user":
       handleAskUser(message.payload);
+      break;
+    case "connection_status":
+      handleConnectionStatus(message.payload);
       break;
     default:
       console.warn("[Sidebar] Unknown message type:", message.type);
@@ -76,6 +86,7 @@ function handleStatus(payload) {
     case "disconnected":
       hideStatus();
       addMessage("agent-error", message);
+      setConnectionState("error", "Disconnected: " + message);
       setRunning(false);
       break;
   }
@@ -185,6 +196,39 @@ function setRunning(running) {
   sendBtn.classList.toggle("hidden", running);
   stopBtn.classList.toggle("hidden", !running);
   taskInput.disabled = running;
+}
+
+function handleConnectionStatus(payload) {
+  const { nativeHost, foundryLocal, error } = payload;
+
+  if (nativeHost && foundryLocal) {
+    setConnectionState("connected", "Connected to Foundry Local");
+  } else if (nativeHost && !foundryLocal) {
+    setConnectionState("error", "Native host connected but Foundry Local is not responding");
+    addMessage("agent-error",
+      "Connection issue: Native messaging host is running but cannot reach Foundry Local.\n" +
+      "Error: " + (error || "Unknown") + "\n" +
+      "Troubleshooting:\n" +
+      "  1. Check if Foundry Local is running: foundry service status\n" +
+      "  2. Start the model: foundry model run phi-4-mini\n" +
+      "  3. Check host log: %LOCALAPPDATA%\\FoundryBrowserControl\\host.log"
+    );
+  } else {
+    setConnectionState("error", "Cannot connect to native messaging host");
+    addMessage("agent-error",
+      "Connection issue: Cannot connect to native messaging host.\n" +
+      "Error: " + (error || "Unknown") + "\n" +
+      "Troubleshooting:\n" +
+      "  1. Run the installer: scripts\\install-host.ps1\n" +
+      "  2. Check registry: HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.foundry.browsercontrol\n" +
+      "  3. Verify the host exe exists at the path in the manifest"
+    );
+  }
+}
+
+function setConnectionState(state, tooltip) {
+  connectionLight.className = "connection-light " + state;
+  connectionLight.title = tooltip;
 }
 
 // Event listeners

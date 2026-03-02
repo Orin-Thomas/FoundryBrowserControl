@@ -63,10 +63,42 @@ public sealed class BrowserAgent
                     await HandleUserResponseAsync(response, ct);
                     break;
 
+                case "health_check":
+                    await HandleHealthCheckAsync(ct);
+                    break;
+
                 default:
                     await SendStatusAsync("error", $"Unknown message type: {message.Type}", ct);
                     break;
             }
+        }
+    }
+
+    private async Task HandleHealthCheckAsync(CancellationToken ct)
+    {
+        // Test connectivity to Foundry Local by making a lightweight API call
+        try
+        {
+            var messages = new List<ChatMessage>
+            {
+                ChatMessage.User("hi")
+            };
+            var result = await _llm.ChatAsync(messages, ct);
+            var ok = !string.IsNullOrEmpty(result);
+
+            await _writer.WriteAsync(new NativeMessage
+            {
+                Type = "health_check_result",
+                Payload = new { nativeHost = true, foundryLocal = ok, error = ok ? (string?)null : "LLM returned empty response" }
+            }, ct);
+        }
+        catch (Exception ex)
+        {
+            await _writer.WriteAsync(new NativeMessage
+            {
+                Type = "health_check_result",
+                Payload = new { nativeHost = true, foundryLocal = false, error = ex.Message }
+            }, ct);
         }
     }
 

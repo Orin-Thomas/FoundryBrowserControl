@@ -29,14 +29,51 @@ chrome.runtime.onConnect.addListener((port) => {
 function handleSidebarMessage(message) {
   console.log("[Background] From sidebar:", message);
 
+  if (message.type === "check_connection") {
+    checkConnection();
+    return;
+  }
+
   if (message.type === "task" || message.type === "stop" || message.type === "clear" || message.type === "user_response") {
     ensureNativePort();
     if (nativePort) {
       nativePort.postMessage(message);
     } else {
-      sendToSidebar({ type: "status", payload: { status: "error", message: "Failed to connect to native host. Is it installed?" } });
+      sendToSidebar({
+        type: "connection_status",
+        payload: { nativeHost: false, foundryLocal: false, error: chrome.runtime.lastError?.message || "Native host not found" }
+      });
     }
   }
+}
+
+// Check connection to native host and Foundry Local
+function checkConnection() {
+  // Try connecting to native host
+  ensureNativePort();
+
+  if (!nativePort) {
+    sendToSidebar({
+      type: "connection_status",
+      payload: { nativeHost: false, foundryLocal: false, error: chrome.runtime.lastError?.message || "Native messaging host not found or not registered" }
+    });
+    return;
+  }
+
+  // Native host is connected, ask it to check Foundry Local
+  const requestId = "healthcheck-" + Date.now();
+  nativePort.postMessage({ type: "health_check", requestId });
+
+  // Set a timeout in case the host doesn't respond
+  setTimeout(() => {
+    // If we still have the port, native host is at least alive
+    if (nativePort) {
+      sendToSidebar({
+        type: "connection_status",
+        payload: { nativeHost: true, foundryLocal: false, error: "Health check timed out - Foundry Local may not be responding" }
+      });
+    }
+  }, 10000);
 }
 
 // Handle messages from the native host
@@ -56,6 +93,13 @@ function handleNativeMessage(message) {
     case "ask_user":
     case "complete":
       sendToSidebar(message);
+      break;
+
+    case "health_check_result":
+      sendToSidebar({
+        type: "connection_status",
+        payload: message.payload
+      });
       break;
 
     default:
