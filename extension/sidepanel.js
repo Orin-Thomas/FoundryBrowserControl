@@ -211,9 +211,9 @@ function handleConnectionStatus(payload) {
         : "")
     );
   } else if (nativeHost && !foundryLocal) {
-    setConnectionState("error", "Native host connected but Foundry Local is not responding");
+    setConnectionState("error", "Host connected but Foundry Local is not responding");
     addMessage("agent-error",
-      "Connection issue: Native messaging host is running but cannot reach Foundry Local.\n" +
+      "Connection issue: Host is running but cannot reach Foundry Local.\n" +
       "Error: " + (error || "Unknown") + "\n" +
       "Troubleshooting:\n" +
       "  1. Check if Foundry Local is running: foundry service status\n" +
@@ -222,14 +222,14 @@ function handleConnectionStatus(payload) {
       "  4. Check host log: %LOCALAPPDATA%\\FoundryBrowserControl\\host.log"
     );
   } else {
-    setConnectionState("error", "Cannot connect to native messaging host");
+    setConnectionState("error", "Cannot connect to host");
     addMessage("agent-error",
-      "Connection issue: Cannot connect to native messaging host.\n" +
+      "Connection issue: Cannot connect to the host server.\n" +
       "Error: " + (error || "Unknown") + "\n" +
       "Troubleshooting:\n" +
-      "  1. Run the installer: scripts\\install-host.ps1\n" +
-      "  2. Check registry: HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.foundry.browsercontrol\n" +
-      "  3. Verify the host exe exists at the path in the manifest"
+      "  1. Start the host: dotnet run --project src/FoundryBrowserControl.Host\n" +
+      "  2. Or run the built exe from the install location\n" +
+      "  3. Default port: 52945 (set BROWSER_CONTROL_PORT to change)"
     );
   }
 }

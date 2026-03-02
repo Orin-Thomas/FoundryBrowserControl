@@ -1,13 +1,11 @@
 using System.Diagnostics;
-using System.Net.Http;
+using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using FoundryBrowserControl.Host.Agent;
 using FoundryBrowserControl.Host.Llm;
-using FoundryBrowserControl.Host.NativeMessaging;
+using FoundryBrowserControl.Host.Transport;
 
-// Native messaging hosts must not write to stderr (it goes to the browser's debug log).
-// Redirect stderr to a log file for diagnostics.
 var logPath = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
     "FoundryBrowserControl",
@@ -17,25 +15,23 @@ var logStream = new StreamWriter(logPath, append: true) { AutoFlush = true };
 
 try
 {
-    await logStream.WriteLineAsync($"[{DateTime.Now:o}] Host started");
+    var port = int.TryParse(Environment.GetEnvironmentVariable("BROWSER_CONTROL_PORT"), out var p) ? p : 52945;
+    await logStream.WriteLineAsync($"[{DateTime.Now:o}] Host starting on ws://localhost:{port}/ws");
 
-    var model = Environment.GetEnvironmentVariable("FOUNDRY_MODEL")
-                ?? "phi-4-mini";
+    var model = Environment.GetEnvironmentVariable("FOUNDRY_MODEL") ?? "phi-4-mini";
 
-    // Discover Foundry Local endpoint: env var > foundry service status > default
+    // Discover Foundry Local endpoint
     var endpoint = Environment.GetEnvironmentVariable("FOUNDRY_ENDPOINT");
     if (string.IsNullOrEmpty(endpoint))
     {
         endpoint = await DiscoverFoundryEndpointAsync(logStream);
     }
 
-    await logStream.WriteLineAsync($"[{DateTime.Now:o}] Using endpoint: {endpoint}, model: {model}");
+    await logStream.WriteLineAsync($"[{DateTime.Now:o}] Using Foundry endpoint: {endpoint}, model: {model}");
 
-    using var reader = new NativeMessageReader();
-    using var writer = new NativeMessageWriter();
     using var llmClient = new FoundryLocalClient(endpoint, model);
 
-    // Pre-resolve the actual model name from Foundry Local
+    // Pre-resolve model name
     try
     {
         var models = await llmClient.ListModelsAsync(CancellationToken.None);
@@ -47,7 +43,14 @@ try
         await logStream.WriteLineAsync($"[{DateTime.Now:o}] Model resolution failed: {ex.Message}");
     }
 
-    var agent = new BrowserAgent(reader, writer, llmClient);
+    // Start WebSocket server
+    using var listener = new HttpListener();
+    listener.Prefixes.Add($"http://localhost:{port}/");
+    listener.Start();
+    await logStream.WriteLineAsync($"[{DateTime.Now:o}] WebSocket server listening on http://localhost:{port}/");
+
+    Console.WriteLine($"Foundry Browser Control host running on ws://localhost:{port}/ws");
+    Console.WriteLine("Press Ctrl+C to stop.");
 
     using var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) =>
@@ -56,7 +59,46 @@ try
         cts.Cancel();
     };
 
-    await agent.RunAsync(cts.Token);
+    while (!cts.IsCancellationRequested)
+    {
+        HttpListenerContext context;
+        try
+        {
+            context = await listener.GetContextAsync().WaitAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            break;
+        }
+
+        // Handle health endpoint for quick checks
+        if (context.Request.RawUrl == "/health")
+        {
+            context.Response.StatusCode = 200;
+            context.Response.ContentType = "application/json";
+            var health = Encoding.UTF8.GetBytes("{\"status\":\"ok\"}");
+            await context.Response.OutputStream.WriteAsync(health);
+            context.Response.Close();
+            continue;
+        }
+
+        // Handle WebSocket upgrade
+        if (context.Request.IsWebSocketRequest)
+        {
+            await logStream.WriteLineAsync($"[{DateTime.Now:o}] WebSocket client connected from {context.Request.RemoteEndPoint}");
+            _ = HandleWebSocketClientAsync(context, llmClient, logStream, cts.Token);
+        }
+        else
+        {
+            // Return a helpful message for non-WebSocket requests
+            context.Response.StatusCode = 200;
+            context.Response.ContentType = "text/plain";
+            var msg = Encoding.UTF8.GetBytes(
+                $"Foundry Browser Control Host\nWebSocket: ws://localhost:{port}/ws\nHealth: http://localhost:{port}/health\n");
+            await context.Response.OutputStream.WriteAsync(msg);
+            context.Response.Close();
+        }
+    }
 }
 catch (Exception ex)
 {
@@ -69,30 +111,48 @@ finally
     logStream.Dispose();
 }
 
-/// <summary>
-/// Discovers the Foundry Local endpoint by running 'foundry service status' and parsing the output.
-/// If the service is not running, starts it automatically and waits for it to become available.
-/// As a last resort, probes common ports via HTTP to find a running Foundry Local instance.
-/// </summary>
+static async Task HandleWebSocketClientAsync(
+    HttpListenerContext context,
+    FoundryLocalClient llmClient,
+    StreamWriter log,
+    CancellationToken ct)
+{
+    try
+    {
+        var wsContext = await context.AcceptWebSocketAsync(subProtocol: null);
+        await using var transport = new WebSocketTransport(wsContext.WebSocket);
+        var agent = new BrowserAgent(transport, llmClient);
+
+        await log.WriteLineAsync($"[{DateTime.Now:o}] Agent session started");
+        await agent.RunAsync(ct);
+        await log.WriteLineAsync($"[{DateTime.Now:o}] Agent session ended");
+    }
+    catch (Exception ex)
+    {
+        await log.WriteLineAsync($"[{DateTime.Now:o}] WebSocket session error: {ex.Message}");
+    }
+}
+
+// -------------------------------------------------------
+// Foundry Local endpoint discovery (unchanged logic)
+// -------------------------------------------------------
+
 static async Task<string> DiscoverFoundryEndpointAsync(StreamWriter log)
 {
     const string fallback = "http://localhost:5273";
 
     try
     {
-        // Attempt 1: Parse endpoint from 'foundry service status'
         var (output, endpointUrl) = await CheckServiceStatusAsync(log);
 
         if (endpointUrl != null)
             return endpointUrl;
 
-        // Attempt 2: If service is not running (or status was empty/timed out), try to start it
         if (output.Length == 0 || output.Contains("not running", StringComparison.OrdinalIgnoreCase))
         {
             await log.WriteLineAsync($"[{DateTime.Now:o}] Foundry Local not running or status unclear, attempting to start...");
             await StartFoundryServiceAsync(log);
 
-            // Poll for the service to become available (up to 30 seconds)
             for (int i = 0; i < 10; i++)
             {
                 await Task.Delay(3000);
@@ -107,7 +167,6 @@ static async Task<string> DiscoverFoundryEndpointAsync(StreamWriter log)
             await log.WriteLineAsync($"[{DateTime.Now:o}] Service did not start within 30s via CLI polling");
         }
 
-        // Attempt 3: Probe for a running Foundry Local instance via HTTP
         await log.WriteLineAsync($"[{DateTime.Now:o}] CLI discovery failed, probing for Foundry Local via HTTP...");
         var probed = await ProbeForFoundryEndpointAsync(log);
         if (probed != null)
@@ -123,9 +182,6 @@ static async Task<string> DiscoverFoundryEndpointAsync(StreamWriter log)
     return fallback;
 }
 
-/// <summary>
-/// Runs 'foundry service status' and returns the raw output (stdout+stderr) and parsed endpoint URL (if found).
-/// </summary>
 static async Task<(string output, string? endpointUrl)> CheckServiceStatusAsync(StreamWriter log)
 {
     try
@@ -147,7 +203,6 @@ static async Task<(string output, string? endpointUrl)> CheckServiceStatusAsync(
         if (process == null)
             return ("", null);
 
-        // Read both stdout and stderr - Foundry CLI may output to either
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cts.Token);
         var stderrTask = process.StandardError.ReadToEndAsync(cts.Token);
         await process.WaitForExitAsync(cts.Token);
@@ -160,7 +215,6 @@ static async Task<(string output, string? endpointUrl)> CheckServiceStatusAsync(
         if (!string.IsNullOrWhiteSpace(stderr))
             await log.WriteLineAsync($"[{DateTime.Now:o}] foundry service status stderr: {stderr.Trim()}");
 
-        // Match any http(s) URL with a port number
         var match = Regex.Match(combined, @"https?://[\w\.\-]+:\d+");
         return (combined, match.Success ? match.Value : null);
     }
@@ -176,9 +230,6 @@ static async Task<(string output, string? endpointUrl)> CheckServiceStatusAsync(
     }
 }
 
-/// <summary>
-/// Starts the Foundry Local service in the background.
-/// </summary>
 static async Task StartFoundryServiceAsync(StreamWriter log)
 {
     try
@@ -217,24 +268,16 @@ static async Task StartFoundryServiceAsync(StreamWriter log)
     }
 }
 
-/// <summary>
-/// Probes for a running Foundry Local instance by querying /v1/models on likely ports.
-/// Foundry Local uses dynamic ports, so we scan a range of common ones.
-/// </summary>
 static async Task<string?> ProbeForFoundryEndpointAsync(StreamWriter log)
 {
     using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
 
-    // Check well-known ports and a range where Foundry Local typically binds
     var portsToCheck = new List<int> { 5273 };
-    // Foundry Local often uses high ports in the 50000-60000 range
     for (int p = 57670; p <= 57690; p++)
         portsToCheck.Add(p);
-    // Also try some other common ranges
     for (int p = 5000; p <= 5010; p++)
         portsToCheck.Add(p);
 
-    // Also try to find ports from netstat
     try
     {
         var psi = new ProcessStartInfo
@@ -250,7 +293,6 @@ static async Task<string?> ProbeForFoundryEndpointAsync(StreamWriter log)
         {
             var netstatOutput = await proc.StandardOutput.ReadToEndAsync();
             await proc.WaitForExitAsync();
-            // Find all listening ports on 127.0.0.1 or 0.0.0.0
             foreach (Match m in Regex.Matches(netstatOutput,
                 @"(?:127\.0\.0\.1|0\.0\.0\.0):(\d+)\s+.*LISTENING"))
             {
@@ -259,7 +301,7 @@ static async Task<string?> ProbeForFoundryEndpointAsync(StreamWriter log)
             }
         }
     }
-    catch { /* netstat not available, continue with known ports */ }
+    catch { /* netstat not available */ }
 
     var uniquePorts = portsToCheck.Distinct().ToList();
     await log.WriteLineAsync($"[{DateTime.Now:o}] Probing {uniquePorts.Count} ports for Foundry Local...");
@@ -280,10 +322,7 @@ static async Task<string?> ProbeForFoundryEndpointAsync(StreamWriter log)
                 }
             }
         }
-        catch
-        {
-            // Port not responding, continue
-        }
+        catch { }
     }
 
     await log.WriteLineAsync($"[{DateTime.Now:o}] HTTP probe found no Foundry Local instance");

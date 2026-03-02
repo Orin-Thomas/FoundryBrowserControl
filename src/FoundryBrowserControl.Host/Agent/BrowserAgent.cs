@@ -1,7 +1,7 @@
 using System.Text.Json;
 using FoundryBrowserControl.Host.Llm;
 using FoundryBrowserControl.Host.Models;
-using FoundryBrowserControl.Host.NativeMessaging;
+using FoundryBrowserControl.Host.Transport;
 
 namespace FoundryBrowserControl.Host.Agent;
 
@@ -10,8 +10,7 @@ namespace FoundryBrowserControl.Host.Agent;
 /// </summary>
 public sealed class BrowserAgent
 {
-    private readonly NativeMessageReader _reader;
-    private readonly NativeMessageWriter _writer;
+    private readonly IMessageTransport _transport;
     private readonly FoundryLocalClient _llm;
     private readonly List<ChatMessage> _conversationHistory = [];
 
@@ -23,10 +22,9 @@ public sealed class BrowserAgent
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
     };
 
-    public BrowserAgent(NativeMessageReader reader, NativeMessageWriter writer, FoundryLocalClient llm)
+    public BrowserAgent(IMessageTransport transport, FoundryLocalClient llm)
     {
-        _reader = reader;
-        _writer = writer;
+        _transport = transport;
         _llm = llm;
     }
 
@@ -37,7 +35,7 @@ public sealed class BrowserAgent
     {
         while (!ct.IsCancellationRequested)
         {
-            var message = await _reader.ReadAsync<NativeMessage>(ct);
+            var message = await _transport.ReadAsync<NativeMessage>(ct);
             if (message == null)
                 break; // Stream closed
 
@@ -82,7 +80,7 @@ public sealed class BrowserAgent
             var models = await _llm.ListModelsAsync(ct);
             var ok = models.Count > 0;
 
-            await _writer.WriteAsync(new NativeMessage
+            await _transport.WriteAsync(new NativeMessage
             {
                 Type = "health_check_result",
                 Payload = new
@@ -97,7 +95,7 @@ public sealed class BrowserAgent
         }
         catch (Exception ex)
         {
-            await _writer.WriteAsync(new NativeMessage
+            await _transport.WriteAsync(new NativeMessage
             {
                 Type = "health_check_result",
                 Payload = new { nativeHost = true, foundryLocal = false, error = ex.Message }
@@ -255,14 +253,14 @@ public sealed class BrowserAgent
     private async Task<PageState?> RequestPageStateAsync(CancellationToken ct)
     {
         var requestId = Guid.NewGuid().ToString("N")[..8];
-        await _writer.WriteAsync(new NativeMessage
+        await _transport.WriteAsync(new NativeMessage
         {
             Type = "get_page_state",
             RequestId = requestId
         }, ct);
 
         // Wait for the page state response
-        var response = await _reader.ReadAsync<NativeMessage>(ct);
+        var response = await _transport.ReadAsync<NativeMessage>(ct);
         if (response?.Type == "page_state" && response.Payload != null)
         {
             var json = response.Payload.ToString()!;
@@ -274,7 +272,7 @@ public sealed class BrowserAgent
     private async Task<ActionResult> ExecuteActionAsync(BrowserAction action, CancellationToken ct)
     {
         var requestId = Guid.NewGuid().ToString("N")[..8];
-        await _writer.WriteAsync(new NativeMessage
+        await _transport.WriteAsync(new NativeMessage
         {
             Type = "execute_action",
             Payload = action,
@@ -282,7 +280,7 @@ public sealed class BrowserAgent
         }, ct);
 
         // Wait for the action result
-        var response = await _reader.ReadAsync<NativeMessage>(ct);
+        var response = await _transport.ReadAsync<NativeMessage>(ct);
         if (response?.Type == "action_result" && response.Payload != null)
         {
             var json = response.Payload.ToString()!;
@@ -298,7 +296,7 @@ public sealed class BrowserAgent
 
     private async Task SendStatusAsync(string status, string message, CancellationToken ct)
     {
-        await _writer.WriteAsync(new NativeMessage
+        await _transport.WriteAsync(new NativeMessage
         {
             Type = "status",
             Payload = new { status, message }
@@ -307,7 +305,7 @@ public sealed class BrowserAgent
 
     private async Task SendToExtensionAsync(string type, object payload, CancellationToken ct)
     {
-        await _writer.WriteAsync(new NativeMessage
+        await _transport.WriteAsync(new NativeMessage
         {
             Type = type,
             Payload = payload

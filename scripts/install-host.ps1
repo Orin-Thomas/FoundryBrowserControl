@@ -1,9 +1,9 @@
 # install-host.ps1 - Full setup for Foundry Browser Control
-# Installs prerequisites, builds the host, and registers native messaging.
+# Installs prerequisites, builds the host, and starts the WebSocket server.
 param(
     [string]$HostPath = "",
-    [string]$ExtensionId = "",
     [string]$Model = "phi-4-mini",
+    [int]$Port = 52945,
     [switch]$SkipFoundryInstall,
     [switch]$SkipModelDownload,
     [switch]$SkipBuild
@@ -11,8 +11,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$hostName = "com.foundry.browsercontrol"
-$manifestDir = Join-Path $env:LOCALAPPDATA "FoundryBrowserControl"
 $projectDir = Join-Path $PSScriptRoot "..\src\FoundryBrowserControl.Host"
 
 Write-Host ""
@@ -23,7 +21,7 @@ Write-Host ""
 # Step 1: Check and install Foundry Local
 # -------------------------------------------------------
 if (-not $SkipFoundryInstall) {
-    Write-Host "[1/7] Checking Foundry Local..." -ForegroundColor Yellow
+    Write-Host "[1/6] Checking Foundry Local..." -ForegroundColor Yellow
 
     $foundryCmd = Get-Command "foundry" -ErrorAction SilentlyContinue
     if ($foundryCmd) {
@@ -56,14 +54,14 @@ if (-not $SkipFoundryInstall) {
         Write-Host "  [OK] Foundry Local installed successfully" -ForegroundColor Green
     }
 } else {
-    Write-Host "[1/7] Skipping Foundry Local install check (-SkipFoundryInstall)" -ForegroundColor DarkGray
+    Write-Host "[1/6] Skipping Foundry Local install check (-SkipFoundryInstall)" -ForegroundColor DarkGray
 }
 
 # -------------------------------------------------------
 # Step 2: Check and download the LLM model
 # -------------------------------------------------------
 if (-not $SkipModelDownload) {
-    Write-Host "[2/7] Checking model '$Model'..." -ForegroundColor Yellow
+    Write-Host "[2/6] Checking model '$Model'..." -ForegroundColor Yellow
 
     $foundryCmd = Get-Command "foundry" -ErrorAction SilentlyContinue
     if (-not $foundryCmd) {
@@ -137,14 +135,14 @@ if (-not $SkipModelDownload) {
         Remove-Job $infoJob -Force
     }
 } else {
-    Write-Host "[2/7] Skipping model download (-SkipModelDownload)" -ForegroundColor DarkGray
+    Write-Host "[2/6] Skipping model download (-SkipModelDownload)" -ForegroundColor DarkGray
 }
 
 # -------------------------------------------------------
 # Step 3: Check .NET SDK and build the host
 # -------------------------------------------------------
 if (-not $SkipBuild) {
-    Write-Host "[3/7] Building C# native messaging host..." -ForegroundColor Yellow
+    Write-Host "[3/6] Building C# native messaging host..." -ForegroundColor Yellow
 
     $dotnetCmd = Get-Command "dotnet" -ErrorAction SilentlyContinue
     if (-not $dotnetCmd) {
@@ -190,13 +188,13 @@ if (-not $SkipBuild) {
         Pop-Location
     }
 } else {
-    Write-Host "[3/7] Skipping build (-SkipBuild)" -ForegroundColor DarkGray
+    Write-Host "[3/6] Skipping build (-SkipBuild)" -ForegroundColor DarkGray
 }
 
 # -------------------------------------------------------
 # Step 4: Locate the host executable
 # -------------------------------------------------------
-Write-Host "[4/7] Locating host executable..." -ForegroundColor Yellow
+Write-Host "[4/6] Locating host executable..." -ForegroundColor Yellow
 
 if (-not $HostPath) {
     $publishDir = Join-Path $projectDir "bin\Release\net8.0\win-x64\publish"
@@ -216,67 +214,14 @@ $HostPath = (Resolve-Path $HostPath).Path
 Write-Host "  [OK] Host: $HostPath" -ForegroundColor Green
 
 # -------------------------------------------------------
-# Step 5: Register native messaging host
+# Step 5: Start the Foundry Local model
 # -------------------------------------------------------
-Write-Host "[5/7] Registering native messaging host..." -ForegroundColor Yellow
-
-# Build allowed_origins
-$allowedOrigins = @()
-if ($ExtensionId) {
-    $allowedOrigins += "chrome-extension://$ExtensionId/"
-} else {
-    Write-Host ""
-    Write-Host "  NOTE: No extension ID provided. Using wildcard for development." -ForegroundColor Yellow
-    Write-Host "  For production, re-run with: .\install-host.ps1 -ExtensionId <your-extension-id> -SkipFoundryInstall -SkipModelDownload -SkipBuild" -ForegroundColor Yellow
-    $allowedOrigins += "chrome-extension://*/"
-}
-
-# Create the native messaging host manifest
-$manifest = @{
-    name = $hostName
-    description = "Foundry Browser Control - AI-powered browser automation"
-    path = $HostPath
-    type = "stdio"
-    allowed_origins = $allowedOrigins
-} | ConvertTo-Json -Depth 10
-
-# Write manifest file
-if (-not (Test-Path $manifestDir)) {
-    New-Item -ItemType Directory -Path $manifestDir -Force | Out-Null
-}
-
-$manifestPath = Join-Path $manifestDir "$hostName.json"
-$manifest | Out-File -FilePath $manifestPath -Encoding UTF8 -Force
-Write-Host "  Manifest: $manifestPath" -ForegroundColor DarkGray
-
-# Register in Windows Registry for Edge
-$regPath = "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$hostName"
-if (-not (Test-Path $regPath)) {
-    New-Item -Path $regPath -Force | Out-Null
-}
-Set-ItemProperty -Path $regPath -Name "(Default)" -Value $manifestPath
-Write-Host "  Edge registry: $regPath" -ForegroundColor DarkGray
-
-# Also register for Chrome (in case user wants to use Chrome too)
-$chromeRegPath = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$hostName"
-if (-not (Test-Path $chromeRegPath)) {
-    New-Item -Path $chromeRegPath -Force | Out-Null
-}
-Set-ItemProperty -Path $chromeRegPath -Name "(Default)" -Value $manifestPath
-Write-Host "  Chrome registry: $chromeRegPath" -ForegroundColor DarkGray
-
-Write-Host "  [OK] Native messaging host registered" -ForegroundColor Green
-
-# -------------------------------------------------------
-# Step 6: Start the model
-# -------------------------------------------------------
-Write-Host "[6/7] Starting Foundry Local model '$Model'..." -ForegroundColor Yellow
+Write-Host "[5/6] Starting Foundry Local model '$Model'..." -ForegroundColor Yellow
 
 $foundryCmd = Get-Command "foundry" -ErrorAction SilentlyContinue
 if (-not $foundryCmd) {
     Write-Host "  [WARN] Foundry CLI not in PATH. Restart terminal and run: foundry model run $Model" -ForegroundColor Yellow
 } else {
-    # Check if the model is already loaded by querying the service
     $modelAlreadyRunning = $false
     $svcStatusJob = Start-Job -ScriptBlock { & foundry service status 2>&1 }
     $svcStatusDone = $svcStatusJob | Wait-Job -Timeout 15
@@ -300,7 +245,7 @@ if (-not $foundryCmd) {
                 Write-Host "  [OK] Model '$Model' is already running" -ForegroundColor Green
             }
         } catch {
-            # Service may not be ready yet, proceed to start
+            # Service may not be ready yet
         }
     }
 
@@ -317,7 +262,6 @@ if (-not $foundryCmd) {
         Remove-Job $startJob -Force
         Start-Sleep -Seconds 3
 
-        # Discover the endpoint
         $svcOutJob = Start-Job -ScriptBlock { & foundry service status 2>&1 }
         $svcOutDone = $svcOutJob | Wait-Job -Timeout 15
         $svcOut = ""
@@ -331,7 +275,6 @@ if (-not $foundryCmd) {
         $ep = if ($epMatch.Success) { $epMatch.Value } else { "http://localhost:5273" }
         Write-Host "  Service endpoint: $ep" -ForegroundColor DarkGray
 
-        # Trigger model loading by sending a lightweight chat completion request
         Write-Host "  Loading model '$Model' (this may take a minute on first load)..." -ForegroundColor Yellow
         $body = @{
             model = $Model
@@ -364,55 +307,43 @@ if (-not $foundryCmd) {
 }
 
 # -------------------------------------------------------
-# Step 7: Validate Foundry Local service is running
+# Step 6: Start the WebSocket host server
 # -------------------------------------------------------
-Write-Host "[7/7] Validating Foundry Local service..." -ForegroundColor Yellow
+Write-Host "[6/6] Starting host server on port $Port..." -ForegroundColor Yellow
 
-$foundryCmd = Get-Command "foundry" -ErrorAction SilentlyContinue
-if (-not $foundryCmd) {
-    Write-Host "  [WARN] Foundry CLI not in PATH. Restart terminal and run: foundry service status" -ForegroundColor Yellow
-} else {
-    # Check service status
-    $valJob = Start-Job -ScriptBlock { & foundry service status 2>&1 }
-    $valDone = $valJob | Wait-Job -Timeout 15
-    if ($valDone) {
-        $serviceOutput = Receive-Job $valJob | Out-String
-    } else {
-        Stop-Job $valJob -ErrorAction SilentlyContinue
-        $serviceOutput = ""
-        Write-Host "  [WARN] 'foundry service status' timed out." -ForegroundColor Yellow
-    }
-    Remove-Job $valJob -Force
-
-    if ($serviceOutput) {
-        Write-Host "  Service status:" -ForegroundColor DarkGray
-        $serviceOutput.Trim().Split("`n") | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-    }
-
-    if ($serviceOutput -match "running" -and $serviceOutput -notmatch "not running") {
-        Write-Host "  [OK] Foundry Local service is running" -ForegroundColor Green
-
-        # Try a quick health check against the API endpoint
-        $endpointMatch = [regex]::Match($serviceOutput, "https?://[\w\.\-]+:\d+")
-        $endpoint = if ($endpointMatch.Success) { $endpointMatch.Value } else { "http://localhost:5273" }
-
+# Check if something is already listening on the port
+try {
+    $testConn = Test-NetConnection -ComputerName localhost -Port $Port -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+    if ($testConn.TcpTestSucceeded) {
         try {
-            $response = Invoke-RestMethod -Uri "$endpoint/v1/models" -Method Get -TimeoutSec 10 -ErrorAction Stop
-            $modelIds = ($response.data | ForEach-Object { $_.id }) -join ", "
-            if ($modelIds) {
-                Write-Host "  [OK] API is responding. Loaded models: $modelIds" -ForegroundColor Green
-            } else {
-                Write-Host "  [OK] API is responding but no models are loaded yet." -ForegroundColor Yellow
-                Write-Host "    Run: foundry model run $Model" -ForegroundColor Yellow
-            }
+            $resp = Invoke-RestMethod -Uri "http://localhost:$Port/health" -TimeoutSec 2 -ErrorAction Stop
+            Write-Host "  [OK] Host server is already running on port $Port" -ForegroundColor Green
         } catch {
-            Write-Host "  [WARN] Service is running but API did not respond at $endpoint" -ForegroundColor Yellow
-            Write-Host "    The model may still be loading. Check with: foundry service status" -ForegroundColor Yellow
+            Write-Host "  [WARN] Port $Port is in use by another process. Change with -Port <number>" -ForegroundColor Yellow
         }
     } else {
-        Write-Host "  [WARN] Foundry Local service is not running." -ForegroundColor Yellow
-        Write-Host "    Start it with: foundry model run $Model" -ForegroundColor Yellow
+        # Start the host as a background process
+        $hostExe = $HostPath
+        Write-Host "  Starting: $hostExe" -ForegroundColor DarkGray
+        $env:BROWSER_CONTROL_PORT = $Port
+        Start-Process -FilePath $hostExe -WindowStyle Hidden
+        Start-Sleep -Seconds 2
+
+        # Verify it started
+        try {
+            $resp = Invoke-RestMethod -Uri "http://localhost:$Port/health" -TimeoutSec 5 -ErrorAction Stop
+            Write-Host "  [OK] Host server started on ws://localhost:$Port/ws" -ForegroundColor Green
+        } catch {
+            Write-Host "  [WARN] Host may not have started. Run manually:" -ForegroundColor Yellow
+            Write-Host "    $hostExe" -ForegroundColor Yellow
+        }
     }
+} catch {
+    Write-Host "  Starting host process..." -ForegroundColor Yellow
+    $env:BROWSER_CONTROL_PORT = $Port
+    Start-Process -FilePath $HostPath -WindowStyle Hidden
+    Start-Sleep -Seconds 2
+    Write-Host "  [OK] Host process started" -ForegroundColor Green
 }
 
 # -------------------------------------------------------
@@ -421,9 +352,9 @@ if (-not $foundryCmd) {
 Write-Host ""
 Write-Host "=== Setup Complete ===" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Host:     $hostName" -ForegroundColor White
-Write-Host "  Exe:      $HostPath" -ForegroundColor White
-Write-Host "  Manifest: $manifestPath" -ForegroundColor White
+Write-Host "  Host:     $HostPath" -ForegroundColor White
+Write-Host "  Server:   ws://localhost:$Port/ws" -ForegroundColor White
+Write-Host "  Health:   http://localhost:$Port/health" -ForegroundColor White
 Write-Host "  Model:    $Model" -ForegroundColor White
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
@@ -431,8 +362,9 @@ Write-Host "  1. Load the extension in Edge:" -ForegroundColor White
 Write-Host "     - Open edge://extensions" -ForegroundColor White
 Write-Host "     - Enable Developer mode" -ForegroundColor White
 Write-Host "     - Click 'Load unpacked' and select the 'extension/' folder" -ForegroundColor White
-if (-not $ExtensionId) {
-    Write-Host "  2. Copy the Extension ID and re-run:" -ForegroundColor White
-    Write-Host "     .\install-host.ps1 -ExtensionId <id> -SkipFoundryInstall -SkipModelDownload -SkipBuild" -ForegroundColor White
-}
+Write-Host "  2. Click the extension icon to open the sidebar" -ForegroundColor White
+Write-Host "  3. The green indicator means everything is connected" -ForegroundColor White
+Write-Host ""
+Write-Host "To restart the host manually:" -ForegroundColor DarkGray
+Write-Host "  $HostPath" -ForegroundColor DarkGray
 Write-Host ""
